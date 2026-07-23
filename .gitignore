@@ -1,0 +1,4 @@
+# dev tooling stays local — the published addon is the three runtime files
+gen_dustbunny.py
+dustbunny-manifest.tsv
+test_harness.lua

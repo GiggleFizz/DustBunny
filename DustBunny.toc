@@ -1,0 +1,8 @@
+## Interface: 30300
+## Title: DustBunny
+## Notes: Queue-style Disenchant, Milling and Prospecting: everything dustable in your bags, one deliberate click per cast. Legendaries untouchable; epics are a rite of passage.
+## Author: GiggleFizz
+## Version: 1.0.0
+## SavedVariables: DustBunnyDB
+DustBunnyData.lua
+DustBunny.lua
