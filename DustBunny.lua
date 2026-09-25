@@ -25,11 +25,16 @@ local TABS = {
     { key = "disenchant", label = "Disenchant",  spell = "Disenchant",  skill = "Enchanting",    minStack = 1 },
     { key = "mill",       label = "Milling",     spell = "Milling",     skill = "Inscription",   minStack = 5 },
     { key = "prospect",   label = "Prospecting", spell = "Prospecting", skill = "Jewelcrafting", minStack = 5 },
+    -- 1.1.0 "Forge": a CRAFT tab — rows come from the open Mining window
+    -- (GetTradeSkillInfo), execution is DoTradeSkill(index, n): the
+    -- client's own repeat engine, unprotected, so "make N" is one click
+    { key = "smelt",      label = "Smelting",    spell = "Smelting",    skill = "Mining",        craft = true },
     { key = "excluded",   label = "Excluded" },
 }
 
 local DB              -- SavedVariables (exclusions, pos)
 local frame, listRows, scrollFrame, castButtons, tabButtons, statusText
+local smeltBox, smeltBtn, maxBtn   -- craft-tab controls (1.1.0)
 local activeTab = 1
 local selected = nil       -- itemID selected in the active tab
 local entries = {}         -- current tab's display list
@@ -73,6 +78,25 @@ local function ScanBags()
         table.sort(entries, function(a, b) return a.name < b.name end)
         return
     end
+    if tab.craft then
+        -- the open trade-skill window IS the data: every recipe this
+        -- character knows, with the client's own "makes up to N"
+        if GetTradeSkillLine() ~= tab.skill then return end
+        for i = 1, GetNumTradeSkills() do
+            local name, kind, numAvailable = GetTradeSkillInfo(i)
+            if name and kind ~= "header" then
+                local id = ItemIdFromLink(GetTradeSkillItemLink(i))
+                if id and not DB.exclusions[id] and (numAvailable or 0) > 0 then
+                    local _, _, quality = GetItemInfo(id)
+                    table.insert(entries, { id = id, name = name, quality = quality or 1,
+                                            count = numAvailable, index = i,
+                                            icon = GetTradeSkillIcon(i) })
+                end
+            end
+        end
+        table.sort(entries, function(a, b) return a.name < b.name end)
+        return
+    end
     local data = DustBunny_Data[tab.key]
     local byId = {}
     for _, bag in ipairs(BAGS) do
@@ -112,6 +136,7 @@ end
 
 local function EntryUsable(e)
     local tab = TABS[activeTab]
+    if tab.craft then return (e.count or 0) > 0 and skills[tab.skill] ~= nil end
     if not e.bag then return false end                     -- no stack meets rule
     local rank = skills[tab.skill]
     if not rank then return false end                      -- profession unknown
@@ -134,6 +159,13 @@ local function UpdateMacro()
     local tab = TABS[activeTab]
     local btn = castButtons[activeTab]
     if not btn then return end
+    if tab.craft then
+        -- craft tab's secure button just opens the trade-skill window
+        -- (a cast, hardware-legal); smelting itself is DoTradeSkill
+        btn:SetAttribute("macrotext", "/cast " .. tab.spell)
+        btn:Enable()
+        return
+    end
     local target
     for _, e in ipairs(entries) do
         if e.id == selected and EntryUsable(e) then target = e break end
@@ -173,7 +205,7 @@ local function Refresh()
             row.text:SetText(e.name)
             row.text:SetTextColor(r, g, b)
             row.count:SetText(e.count > 0 and e.count or "")
-            local icon = select(10, GetItemInfo(e.id))
+            local icon = e.icon or select(10, GetItemInfo(e.id))
             row.icon:SetTexture(icon or "Interface\\Icons\\INV_Misc_QuestionMark")
             row.id = e.id
             -- 3.3.5 has no SetShown (field catch 2026-07-23) — era-correct:
@@ -201,7 +233,46 @@ local function Refresh()
     for i, cb in ipairs(castButtons) do
         if i == activeTab then cb:Show() else cb:Hide() end
     end
+    -- craft tab: window open -> count controls; closed -> the Open button
+    if smeltBox then
+        local windowOpen = tab.craft and GetTradeSkillLine() == tab.skill
+        if windowOpen then
+            castButtons[activeTab]:Hide()
+            smeltBox:Show(); smeltBtn:Show(); maxBtn:Show()
+            local sel
+            for _, e in ipairs(entries) do if e.id == selected then sel = e end end
+            if sel then smeltBtn:Enable() else smeltBtn:Disable() end
+        else
+            smeltBox:Hide(); smeltBtn:Hide(); maxBtn:Hide()
+            if tab.craft then
+                castButtons[activeTab]:SetText("Open " .. tab.skill)
+                statusText:SetText("Open the " .. tab.skill .. " window to list recipes")
+            end
+        end
+    end
     UpdateMacro()
+end
+
+-- craft execution: DoTradeSkill(index, n) — n clamped to the client's own
+-- "makes up to" so the box can never over-ask; blank = 1 (stock convention)
+local function SelectedEntry()
+    for _, e in ipairs(entries) do if e.id == selected then return e end end
+end
+
+local function SmeltClicked()
+    local tab = TABS[activeTab]
+    if not tab.craft then return end
+    local e = SelectedEntry()
+    if not e or not EntryUsable(e) then return end
+    local n = tonumber(smeltBox:GetText()) or 1
+    if n < 1 then n = 1 end
+    if n > e.count then n = e.count end
+    DoTradeSkill(e.index, n)
+end
+
+local function MaxClicked()
+    local e = SelectedEntry()
+    if e then smeltBox:SetText(tostring(e.count)) end
 end
 
 local function SetTab(i)
@@ -347,6 +418,7 @@ local function BuildFrame()
             -- combat: disarm this click if the spell can't actually fire.
             cb:SetScript("PreClick", function(self)
                 if InCombatLockdown() then return end
+                if tab.craft then UpdateMacro() return end
                 local start, duration = GetSpellCooldown(tab.spell)
                 local busy = (start and start > 0 and duration and duration > 0)
                              or UnitCastingInfo("player") ~= nil
@@ -360,6 +432,35 @@ local function BuildFrame()
             castButtons[i] = cb
         end
     end
+
+    -- craft-tab controls (1.1.0): [ count ] [Smelt] [Max] in the cast
+    -- button's slot; plain buttons — DoTradeSkill is unprotected
+    smeltBox = CreateFrame("EditBox", "DustBunnySmeltCount", frame, "InputBoxTemplate")
+    smeltBox:SetWidth(48)
+    smeltBox:SetHeight(20)
+    smeltBox:SetPoint("BOTTOM", -74, 22)
+    smeltBox:SetNumeric(true)
+    smeltBox:SetMaxLetters(4)
+    smeltBox:SetAutoFocus(false)
+    smeltBox:SetScript("OnEnterPressed", function(self) self:ClearFocus() SmeltClicked() end)
+    smeltBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    smeltBox:Hide()
+
+    smeltBtn = CreateFrame("Button", "DustBunnySmelt", frame, "UIPanelButtonTemplate")
+    smeltBtn:SetWidth(90)
+    smeltBtn:SetHeight(24)
+    smeltBtn:SetPoint("BOTTOM", 10, 20)
+    smeltBtn:SetText("Smelt")
+    smeltBtn:SetScript("OnClick", SmeltClicked)
+    smeltBtn:Hide()
+
+    maxBtn = CreateFrame("Button", "DustBunnySmeltMax", frame, "UIPanelButtonTemplate")
+    maxBtn:SetWidth(50)
+    maxBtn:SetHeight(24)
+    maxBtn:SetPoint("LEFT", smeltBtn, "RIGHT", 4, 0)
+    maxBtn:SetText("Max")
+    maxBtn:SetScript("OnClick", MaxClicked)
+    maxBtn:Hide()
 end
 
 -- ----------------------------------------------------------- launcher --
@@ -555,6 +656,9 @@ ev:RegisterEvent("BAG_UPDATE")
 ev:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
 ev:RegisterEvent("LOOT_OPENED")
 ev:RegisterEvent("LOOT_CLOSED")
+ev:RegisterEvent("TRADE_SKILL_SHOW")
+ev:RegisterEvent("TRADE_SKILL_UPDATE")
+ev:RegisterEvent("TRADE_SKILL_CLOSE")
 ev:SetScript("OnEvent", function(self, event, arg1, arg2)
     if event == "ADDON_LOADED" and arg1 == ADDON then
         DustBunnyDB = DustBunnyDB or {}
@@ -596,6 +700,11 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2)
         end
     elseif event == "LOOT_CLOSED" then
         lootPending = false
+    elseif event == "TRADE_SKILL_SHOW" or event == "TRADE_SKILL_UPDATE"
+        or event == "TRADE_SKILL_CLOSE" then
+        if frame and frame:IsShown() and TABS[activeTab].craft then
+            rescanQueued = true
+        end
     end
 end)
 
