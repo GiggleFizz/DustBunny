@@ -404,6 +404,13 @@ local function BuildFrame()
     end)
     frame:Hide()
     frame:SetScript("OnHide", EndHeadless)          -- close/Esc ends a forge session
+    -- exclusive with the Blizzard trade-skill window on EVERY tab (field
+    -- 2026-09-25, overlap): a session live at open time is someone else's
+    -- window — hang it up. The forge's own session never exists while
+    -- DustBunny is hidden (OnHide ends it), so this cannot hit our own.
+    frame:SetScript("OnShow", function()
+        if not headless and GetTradeSkillLine() then CloseTradeSkill() end
+    end)
     table.insert(UISpecialFrames, "DustBunnyFrame")  -- Esc closes
 
     local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -827,6 +834,13 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2)
         lootPending = false
     elseif event == "TRADE_SKILL_SHOW" or event == "TRADE_SKILL_UPDATE"
         or event == "TRADE_SKILL_CLOSE" then
+        if event == "TRADE_SKILL_SHOW" and frame and frame:IsShown()
+           and not TABS[activeTab].craft then
+            -- exclusive on every tab: a profession window opened — yield
+            Print("yields to " .. tostring(GetTradeSkillLine()) .. ".")
+            frame:Hide()
+            return
+        end
         if frame and frame:IsShown() and TABS[activeTab].craft then
             InstallShowWrapper()   -- Blizzard_TradeSkillUI may have loaded just now
             if event == "TRADE_SKILL_SHOW" then
