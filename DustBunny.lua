@@ -199,7 +199,14 @@ local function InstallShowWrapper()
     if not TradeSkillFrame_Show then return end
     DustBunny_OrigTradeSkillShow = TradeSkillFrame_Show
     TradeSkillFrame_Show = function(...)
-        if headless then return end
+        -- UIParent's TRADE_SKILL_SHOW handler runs BEFORE ours, so a stale
+        -- flag alone would swallow ANOTHER profession's first open (field
+        -- 2026-09-25): suppress only when the live session is the forge's
+        if headless then
+            for _, t in ipairs(TABS) do
+                if t.craft and GetTradeSkillLine() == t.skill then return end
+            end
+        end
         return DustBunny_OrigTradeSkillShow(...)
     end
 end
@@ -403,7 +410,10 @@ local function BuildFrame()
                     self:SetAttribute("macrotext", "/cast " .. tab.spell)
                 end
             end)
-            tb:SetScript("PostClick", function() SetTab(i) end)
+            tb:SetScript("PostClick", function()
+                headless = true      -- forge owns the NEXT Mining session (no viewer flash)
+                SetTab(i)
+            end)
         else
             tb = CreateFrame("CheckButton", "DustBunnyTab" .. i, frame,
                              "SpellBookSkillLineTabTemplate")
@@ -766,8 +776,17 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2)
         if frame and frame:IsShown() and TABS[activeTab].craft then
             InstallShowWrapper()   -- Blizzard_TradeSkillUI may have loaded just now
             if event == "TRADE_SKILL_SHOW" then
-                headless = (GetTradeSkillLine() == TABS[activeTab].skill)
-                if headless then SuppressTradeSkillFrame() end
+                if GetTradeSkillLine() == TABS[activeTab].skill then
+                    headless = true
+                    SuppressTradeSkillFrame()
+                else
+                    -- another profession took the (single) session: the
+                    -- forge yields — DustBunny closes, THEIR window stands
+                    headless = false
+                    Print("forge yields to " .. tostring(GetTradeSkillLine()) .. ".")
+                    frame:Hide()
+                    return
+                end
             elseif event == "TRADE_SKILL_CLOSE" then
                 headless = false
             end
