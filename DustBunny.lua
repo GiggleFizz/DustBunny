@@ -193,9 +193,13 @@ local function SuppressTradeSkillFrame()
     end
 end
 
+-- NEVER force-load Blizzard_TradeSkillUI: it is load-on-demand, and its
+-- load fires trade-skill events that other addons (ProfessionCapper,
+-- field 2026-09-25) read as "a profession window is opening". Wrap lazily:
+-- at login if already loaded, on ADDON_LOADED when UIParent loads it, and
+-- on TRADE_SKILL_SHOW as the last resort.
 local function InstallShowWrapper()
     if DustBunny_OrigTradeSkillShow then return end
-    if not TradeSkillFrame_Show then LoadAddOn("Blizzard_TradeSkillUI") end
     if not TradeSkillFrame_Show then return end
     DustBunny_OrigTradeSkillShow = TradeSkillFrame_Show
     TradeSkillFrame_Show = function(...)
@@ -730,7 +734,9 @@ ev:RegisterEvent("TRADE_SKILL_SHOW")
 ev:RegisterEvent("TRADE_SKILL_UPDATE")
 ev:RegisterEvent("TRADE_SKILL_CLOSE")
 ev:SetScript("OnEvent", function(self, event, arg1, arg2)
-    if event == "ADDON_LOADED" and arg1 == ADDON then
+    if event == "ADDON_LOADED" and arg1 == "Blizzard_TradeSkillUI" then
+        InstallShowWrapper()   -- UIParent just loaded the viewer: wrap before its first show
+    elseif event == "ADDON_LOADED" and arg1 == ADDON then
         DustBunnyDB = DustBunnyDB or {}
         DustBunnyDB.exclusions = DustBunnyDB.exclusions or {}
         DustBunnyDB.pos = DustBunnyDB.pos or {}
