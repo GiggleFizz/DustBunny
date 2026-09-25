@@ -385,8 +385,14 @@ local function BuildFrame()
             -- spell (hardware-legal) opens the session; PostClick switches
             -- the tab. PreClick blanks the cast when a session is already
             -- live (unknown whether a re-cast would toggle it — not assumed).
+            -- template ORDER matters: the spellbook tab template carries an
+            -- inline OnClick (SpellBookSkillLineTab_OnClick — field error
+            -- 2026-09-25, SpellBookFrame.lua:571) and a later template
+            -- overrides earlier handlers. Secure template LAST so its
+            -- OnClick is the one that stands; setting it by hand would
+            -- taint the handler and block the cast.
             tb = CreateFrame("CheckButton", "DustBunnyTab" .. i, frame,
-                             "SecureActionButtonTemplate, SpellBookSkillLineTabTemplate")
+                             "SpellBookSkillLineTabTemplate, SecureActionButtonTemplate")
             tb:SetAttribute("type", "macro")
             tb:RegisterForClicks("LeftButtonUp")
             tb:SetScript("PreClick", function(self)
