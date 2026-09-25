@@ -35,6 +35,7 @@ local TABS = {
 local DB              -- SavedVariables (exclusions, pos)
 local frame, listRows, scrollFrame, castButtons, tabButtons, statusText
 local smeltBox, smeltBtn, maxBtn   -- craft-tab controls (1.1.0)
+local headless = false             -- a trade-skill session owned by the forge
 local activeTab = 1
 local selected = nil       -- itemID selected in the active tab
 local entries = {}         -- current tab's display list
@@ -157,15 +158,9 @@ local function UpdateMacro()
         end
     end
     local tab = TABS[activeTab]
+    if tab.craft then return end
     local btn = castButtons[activeTab]
-    if not btn then return end
-    if tab.craft then
-        -- craft tab's secure button just opens the trade-skill window
-        -- (a cast, hardware-legal); smelting itself is DoTradeSkill
-        btn:SetAttribute("macrotext", "/cast " .. tab.spell)
-        btn:Enable()
-        return
-    end
+    if not btn then return end   -- the TAB is the opener; smelting is DoTradeSkill
     local target
     for _, e in ipairs(entries) do
         if e.id == selected and EntryUsable(e) then target = e break end
@@ -178,6 +173,43 @@ local function UpdateMacro()
         btn:SetAttribute("macrotext", "")
         btn:Disable()
     end
+end
+
+-- --------------------------------------------------- headless session --
+-- The trade-skill WINDOW is only a viewer; DoTradeSkill needs the SESSION.
+-- Blizzard_TradeSkillUI.xml:982 — TradeSkillFrame's OnHide calls
+-- CloseTradeSkill(), so hiding it hangs up (the gossip lesson, in an
+-- apron). UIParent shows it via the global TradeSkillFrame_Show
+-- (UIParent.lua:985-988): while the forge owns the session we wrap that
+-- to a no-op; if the window is already up we hide it ONCE with OnHide
+-- neutralised. One session per client (3.3.5): opening Mining replaces
+-- any other profession window — accepted at ruling 2026-09-25.
+local function SuppressTradeSkillFrame()
+    if TradeSkillFrame and TradeSkillFrame:IsShown() then
+        local onHide = TradeSkillFrame:GetScript("OnHide")
+        TradeSkillFrame:SetScript("OnHide", nil)
+        HideUIPanel(TradeSkillFrame)
+        TradeSkillFrame:SetScript("OnHide", onHide)
+    end
+end
+
+local function InstallShowWrapper()
+    if DustBunny_OrigTradeSkillShow then return end
+    if not TradeSkillFrame_Show then LoadAddOn("Blizzard_TradeSkillUI") end
+    if not TradeSkillFrame_Show then return end
+    DustBunny_OrigTradeSkillShow = TradeSkillFrame_Show
+    TradeSkillFrame_Show = function(...)
+        if headless then return end
+        return DustBunny_OrigTradeSkillShow(...)
+    end
+end
+
+local function EndHeadless()
+    if not headless then return end
+    headless = false
+    local tab
+    for _, t in ipairs(TABS) do if t.craft then tab = t end end
+    if tab and GetTradeSkillLine() == tab.skill then CloseTradeSkill() end
 end
 
 -- ------------------------------------------------------------------ UI --
@@ -233,20 +265,20 @@ local function Refresh()
     for i, cb in ipairs(castButtons) do
         if i == activeTab then cb:Show() else cb:Hide() end
     end
-    -- craft tab: window open -> count controls; closed -> the Open button
+    -- craft tab: session live -> count controls; else waiting on the cast
     if smeltBox then
-        local windowOpen = tab.craft and GetTradeSkillLine() == tab.skill
-        if windowOpen then
-            castButtons[activeTab]:Hide()
+        local sessionLive = tab.craft and GetTradeSkillLine() == tab.skill
+        if sessionLive then
+            headless = true
+            SuppressTradeSkillFrame()
             smeltBox:Show(); smeltBtn:Show(); maxBtn:Show()
             local sel
             for _, e in ipairs(entries) do if e.id == selected then sel = e end end
             if sel then smeltBtn:Enable() else smeltBtn:Disable() end
         else
             smeltBox:Hide(); smeltBtn:Hide(); maxBtn:Hide()
-            if tab.craft then
-                castButtons[activeTab]:SetText("Open " .. tab.skill)
-                statusText:SetText("Open the " .. tab.skill .. " window to list recipes")
+            if tab.craft and skills[tab.skill] then
+                statusText:SetText("Opening " .. tab.skill .. "… (click the tab again if nothing lists)")
             end
         end
     end
@@ -276,6 +308,7 @@ local function MaxClicked()
 end
 
 local function SetTab(i)
+    if TABS[activeTab].craft and not TABS[i].craft then EndHeadless() end
     activeTab = i
     selected = nil
     FauxScrollFrame_SetOffset(scrollFrame, 0)
@@ -326,6 +359,7 @@ local function BuildFrame()
         DB.pos = { point = point, rel = rel, x = x, y = y }
     end)
     frame:Hide()
+    frame:SetScript("OnHide", EndHeadless)          -- close/Esc ends a forge session
     table.insert(UISpecialFrames, "DustBunnyFrame")  -- Esc closes
 
     local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -345,15 +379,36 @@ local function BuildFrame()
     -- guessed paths); fallbacks cover unknown professions.
     tabButtons = {}
     for i, tab in ipairs(TABS) do
-        local tb = CreateFrame("CheckButton", "DustBunnyTab" .. i, frame,
-                               "SpellBookSkillLineTabTemplate")
+        local tb
+        if tab.craft then
+            -- the tab IS the opener: a secure click-cast of the profession
+            -- spell (hardware-legal) opens the session; PostClick switches
+            -- the tab. PreClick blanks the cast when a session is already
+            -- live (unknown whether a re-cast would toggle it — not assumed).
+            tb = CreateFrame("CheckButton", "DustBunnyTab" .. i, frame,
+                             "SecureActionButtonTemplate, SpellBookSkillLineTabTemplate")
+            tb:SetAttribute("type", "macro")
+            tb:RegisterForClicks("LeftButtonUp")
+            tb:SetScript("PreClick", function(self)
+                if InCombatLockdown() then return end
+                if GetTradeSkillLine() == tab.skill then
+                    self:SetAttribute("macrotext", "")
+                else
+                    self:SetAttribute("macrotext", "/cast " .. tab.spell)
+                end
+            end)
+            tb:SetScript("PostClick", function() SetTab(i) end)
+        else
+            tb = CreateFrame("CheckButton", "DustBunnyTab" .. i, frame,
+                             "SpellBookSkillLineTabTemplate")
+            tb:SetScript("OnClick", function() SetTab(i) end)
+        end
         tb:SetPoint("TOPLEFT", frame, "TOPRIGHT", -13, -44 - (i - 1) * 42)
         local icon = tab.spell and GetSpellTexture(tab.spell)
         if not icon and tab.key == "excluded" then
             icon = "Interface\\Buttons\\UI-GroupLoot-Pass-Up"
         end
         tb:SetNormalTexture(icon or "Interface\\Icons\\INV_Misc_QuestionMark")
-        tb:SetScript("OnClick", function() SetTab(i) end)
         tb:SetScript("OnEnter", function(self)
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
             GameTooltip:SetText(tab.label)
@@ -402,7 +457,7 @@ local function BuildFrame()
     -- only macrotext changes, out of combat, per selection)
     castButtons = {}
     for i, tab in ipairs(TABS) do
-        if tab.spell then
+        if tab.spell and not tab.craft then
             local cb = CreateFrame("Button", "DustBunnyCast" .. tab.key, frame,
                                    "SecureActionButtonTemplate, UIPanelButtonTemplate")
             cb:SetWidth(140)
@@ -418,7 +473,6 @@ local function BuildFrame()
             -- combat: disarm this click if the spell can't actually fire.
             cb:SetScript("PreClick", function(self)
                 if InCombatLockdown() then return end
-                if tab.craft then UpdateMacro() return end
                 local start, duration = GetSpellCooldown(tab.spell)
                 local busy = (start and start > 0 and duration and duration > 0)
                              or UnitCastingInfo("player") ~= nil
@@ -669,6 +723,7 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2)
         ScanSkills()
         BuildFrame()
         BuildLauncher()
+        InstallShowWrapper()
         Print("loaded. /dustbunny (or /db) opens the burrow; the launcher button snaps to bars.")
     elseif event == "SKILL_LINES_CHANGED" then
         ScanSkills()
@@ -703,6 +758,13 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2)
     elseif event == "TRADE_SKILL_SHOW" or event == "TRADE_SKILL_UPDATE"
         or event == "TRADE_SKILL_CLOSE" then
         if frame and frame:IsShown() and TABS[activeTab].craft then
+            InstallShowWrapper()   -- Blizzard_TradeSkillUI may have loaded just now
+            if event == "TRADE_SKILL_SHOW" then
+                headless = (GetTradeSkillLine() == TABS[activeTab].skill)
+                if headless then SuppressTradeSkillFrame() end
+            elseif event == "TRADE_SKILL_CLOSE" then
+                headless = false
+            end
             rescanQueued = true
         end
     end
