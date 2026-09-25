@@ -37,6 +37,7 @@ local frame, listRows, scrollFrame, castButtons, tabButtons, statusText
 local smeltBox, smeltBtn, maxBtn   -- craft-tab controls (1.1.0)
 local presetBtns = {}              -- one-click amounts (1.1.0 field enhancement)
 local pendingCraft = nil           -- { name=, remaining= } while a batch runs
+
 local PRESETS = { 5, 10, 25, 50, 100 }
 local FRAME_H, FORGE_EXTRA = 360, 24   -- the forge grows one strip taller
 local headless = false             -- a trade-skill session owned by the forge
@@ -46,6 +47,22 @@ local entries = {}         -- current tab's display list
 local skills = {}          -- skill name -> rank
 local lootPending = false
 local rescanQueued = false
+
+local trace = false                -- /db trace: print trade-skill state transitions
+local function Trace(where)
+    if not trace then return end
+    local line = string.format("%s | line=%s tab=%s headless=%s shown=%s",
+        where, tostring(GetTradeSkillLine()), tostring(TABS[activeTab] and TABS[activeTab].key),
+        tostring(headless), tostring(frame and frame:IsShown()))
+    DEFAULT_CHAT_FRAME:AddMessage("|cff88ccff[DB]|r " .. line)
+    -- persisted copy: SavedVariables flush on /reload or logout, so the
+    -- trace can be read from WTF/ instead of squinted at in chat
+    if DB then
+        DB.tracelog = DB.tracelog or {}
+        table.insert(DB.tracelog, date("%H:%M:%S ") .. line)
+        if #DB.tracelog > 300 then table.remove(DB.tracelog, 1) end
+    end
+end
 
 local function Print(msg)
     DEFAULT_CHAT_FRAME:AddMessage("|cffd2b48cDustBunny|r: " .. msg)
@@ -220,6 +237,7 @@ local function InstallShowWrapper()
 end
 
 local function EndHeadless()
+    Trace("EndHeadless")
     if not headless then return end
     headless = false
     local tab
@@ -409,7 +427,8 @@ local function BuildFrame()
     -- window — hang it up. The forge's own session never exists while
     -- DustBunny is hidden (OnHide ends it), so this cannot hit our own.
     frame:SetScript("OnShow", function()
-        if not headless and GetTradeSkillLine() then CloseTradeSkill() end
+        Trace("OnShow")
+        if not headless and GetTradeSkillLine() then Trace("OnShow: hanging up foreign"); CloseTradeSkill() end
     end)
     table.insert(UISpecialFrames, "DustBunnyFrame")  -- Esc closes
 
@@ -453,10 +472,17 @@ local function BuildFrame()
                 else
                     self:SetAttribute("macrotext", "/cast " .. tab.spell)
                 end
+                -- the cast fires TRADE_SKILL_SHOW SYNCHRONOUSLY inside the
+                -- click (persisted trace 2026-09-25: SHOW landed before
+                -- PostClick and the DE tab yielded). Claim the forge and
+                -- switch tabs BEFORE the cast, not after.
+                Trace("tab PreClick (macro=" .. tostring(self:GetAttribute("macrotext")) .. ")")
+                headless = true
+                SetTab(i)
             end)
             tb:SetScript("PostClick", function()
-                headless = true      -- forge owns the NEXT Mining session (no viewer flash)
-                SetTab(i)
+                Trace("tab PostClick")
+                Refresh()            -- the session may already be live
             end)
         else
             tb = CreateFrame("CheckButton", "DustBunnyTab" .. i, frame,
@@ -834,8 +860,10 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2)
         lootPending = false
     elseif event == "TRADE_SKILL_SHOW" or event == "TRADE_SKILL_UPDATE"
         or event == "TRADE_SKILL_CLOSE" then
+        Trace("event " .. event)
         if event == "TRADE_SKILL_SHOW" and frame and frame:IsShown()
            and not TABS[activeTab].craft then
+            Trace("YIELD (non-craft tab)")
             -- exclusive on every tab: a profession window opened — yield
             Print("yields to " .. tostring(GetTradeSkillLine()) .. ".")
             frame:Hide()
@@ -851,6 +879,7 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2)
                     -- another profession took the (single) session: the
                     -- forge yields — DustBunny closes, THEIR window stands
                     headless = false
+                    Trace("YIELD (craft tab, foreign line)")
                     Print("forge yields to " .. tostring(GetTradeSkillLine()) .. ".")
                     frame:Hide()
                     return
@@ -873,8 +902,14 @@ end)
 -- -------------------------------------------------------------- slash --
 SLASH_DUSTBUNNY1 = "/dustbunny"
 SLASH_DUSTBUNNY2 = "/db"
-SlashCmdList["DUSTBUNNY"] = function()
+SlashCmdList["DUSTBUNNY"] = function(msg)
     if not frame then return end
+    if msg == "trace" then
+        trace = not trace
+        if trace and DB then DB.tracelog = {} end   -- fresh log per session
+        Print("trace " .. (trace and "ON" or "OFF") .. " (persisted to SavedVariables on /reload)")
+        return
+    end
     if frame:IsShown() then
         frame:Hide()
     else
