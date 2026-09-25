@@ -36,6 +36,7 @@ local DB              -- SavedVariables (exclusions, pos)
 local frame, listRows, scrollFrame, castButtons, tabButtons, statusText
 local smeltBox, smeltBtn, maxBtn   -- craft-tab controls (1.1.0)
 local presetBtns = {}              -- one-click amounts (1.1.0 field enhancement)
+local pendingCraft = nil           -- { name=, remaining= } while a batch runs
 local PRESETS = { 5, 10, 25, 50, 100 }
 local FRAME_H, FORGE_EXTRA = 360, 24   -- the forge grows one strip taller
 local headless = false             -- a trade-skill session owned by the forge
@@ -320,7 +321,22 @@ local function SmeltClicked()
     local n = tonumber(smeltBox:GetText()) or 1
     if n < 1 then n = 1 end
     if n > e.count then n = e.count end
+    smeltBox:SetText(tostring(n))              -- the box shows what will actually be made
+    pendingCraft = { name = e.name, remaining = n }
     DoTradeSkill(e.index, n)
+end
+
+-- countdown: one success = one bar; an interrupted batch leaves the
+-- remainder in the box, so the next Smelt finishes the job
+local function CraftSucceeded(spellName)
+    if not pendingCraft or spellName ~= pendingCraft.name then return end
+    pendingCraft.remaining = pendingCraft.remaining - 1
+    if pendingCraft.remaining <= 0 then
+        pendingCraft = nil
+        if smeltBox then smeltBox:SetText("") end
+    elseif smeltBox then
+        smeltBox:SetText(tostring(pendingCraft.remaining))
+    end
 end
 
 local function MaxClicked()
@@ -329,6 +345,8 @@ local function MaxClicked()
 end
 
 local function PresetClicked(n)
+    local e = SelectedEntry()
+    if e and n > e.count then n = e.count end   -- display the clamp too
     smeltBox:SetText(tostring(n))
     SmeltClicked()        -- clamps to makeable, releases focus
 end
@@ -795,6 +813,8 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2)
         if arg1 == "player" and (arg2 == "Disenchant" or arg2 == "Milling"
                                  or arg2 == "Prospecting") then
             lootPending = true
+        elseif arg1 == "player" then
+            CraftSucceeded(arg2)
         end
     elseif event == "LOOT_OPENED" then
         if lootPending then
