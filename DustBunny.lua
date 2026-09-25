@@ -35,6 +35,9 @@ local TABS = {
 local DB              -- SavedVariables (exclusions, pos)
 local frame, listRows, scrollFrame, castButtons, tabButtons, statusText
 local smeltBox, smeltBtn, maxBtn   -- craft-tab controls (1.1.0)
+local presetBtns = {}              -- one-click amounts (1.1.0 field enhancement)
+local PRESETS = { 5, 10, 25, 50, 100 }
+local FRAME_H, FORGE_EXTRA = 360, 24   -- the forge grows one strip taller
 local headless = false             -- a trade-skill session owned by the forge
 local activeTab = 1
 local selected = nil       -- itemID selected in the active tab
@@ -283,11 +286,15 @@ local function Refresh()
             headless = true
             SuppressTradeSkillFrame()
             smeltBox:Show(); smeltBtn:Show(); maxBtn:Show()
+            for _, b in ipairs(presetBtns) do b:Show() end
+            frame:SetHeight(FRAME_H + FORGE_EXTRA)
             local sel
             for _, e in ipairs(entries) do if e.id == selected then sel = e end end
             if sel then smeltBtn:Enable() else smeltBtn:Disable() end
         else
             smeltBox:Hide(); smeltBtn:Hide(); maxBtn:Hide()
+            for _, b in ipairs(presetBtns) do b:Hide() end
+            frame:SetHeight(FRAME_H)
             if tab.craft and skills[tab.skill] then
                 statusText:SetText("Opening " .. tab.skill .. "… (click the tab again if nothing lists)")
             end
@@ -305,6 +312,9 @@ end
 local function SmeltClicked()
     local tab = TABS[activeTab]
     if not tab.craft then return end
+    -- a focused edit box swallows movement/jump/Esc — the very keys that
+    -- interrupt a craft (field 2026-09-25): every smelt path releases it
+    smeltBox:ClearFocus()
     local e = SelectedEntry()
     if not e or not EntryUsable(e) then return end
     local n = tonumber(smeltBox:GetText()) or 1
@@ -316,6 +326,11 @@ end
 local function MaxClicked()
     local e = SelectedEntry()
     if e then smeltBox:SetText(tostring(e.count)) end
+end
+
+local function PresetClicked(n)
+    smeltBox:SetText(tostring(n))
+    SmeltClicked()        -- clamps to makeable, releases focus
 end
 
 local function SetTab(i)
@@ -351,7 +366,7 @@ end
 local function BuildFrame()
     frame = CreateFrame("Frame", "DustBunnyFrame", UIParent)
     frame:SetWidth(340)
-    frame:SetHeight(360)
+    frame:SetHeight(FRAME_H)
     frame:SetPoint(DB.pos.point or "CENTER", UIParent,
                    DB.pos.rel or "CENTER", DB.pos.x or 0, DB.pos.y or 0)
     frame:SetBackdrop({
@@ -535,6 +550,19 @@ local function BuildFrame()
     maxBtn:SetText("Max")
     maxBtn:SetScript("OnClick", MaxClicked)
     maxBtn:Hide()
+
+    -- one-click amounts: fill the box and smelt immediately (clamped)
+    local stripW = #PRESETS * 40 + (#PRESETS - 1) * 4
+    for i, n in ipairs(PRESETS) do
+        local b = CreateFrame("Button", "DustBunnyPreset" .. n, frame, "UIPanelButtonTemplate")
+        b:SetWidth(40)
+        b:SetHeight(20)
+        b:SetPoint("BOTTOM", -stripW / 2 + 20 + (i - 1) * 44, 46)
+        b:SetText(tostring(n))
+        b:SetScript("OnClick", function() PresetClicked(n) end)
+        b:Hide()
+        presetBtns[i] = b
+    end
 end
 
 -- ----------------------------------------------------------- launcher --
