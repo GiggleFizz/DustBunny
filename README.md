@@ -32,6 +32,21 @@ Safety details you'll never notice working:
 - Milling and Prospecting honor the 5-per-stack rule; short stacks show but
   can't fire.
 
+### Smelting — the Forge tab (1.1.0)
+A fourth icon tab turns the same window toward the furnace. Clicking it opens
+a **headless Mining session**: the game's own Smelting is engaged, Blizzard's
+trade-skill viewer is kept out of the way, and your smeltable ores appear as
+rows with live counts. Type a number or use the one-click presets
+(**5 / 10 / 25 / 50 / 100**, each clamped to what you can actually make),
+or hit **Max**, then **Smelt**. The box counts down one per bar; an
+interrupted batch keeps the remainder in the box so the next click finishes
+the job. The session ends when you leave the tab or close the window.
+
+The Forge is polite about ownership: opening DustBunny hangs up any Blizzard
+profession window, and opening a profession window while DustBunny is up
+makes DustBunny yield. One trade-skill session at a time, always the one you
+asked for.
+
 ### What gets listed — the server's own word
 The item lists are generated from the game's actual data (disenchantability,
 millable/prospectable flags, loot tables) — no tooltip guesswork:
@@ -67,6 +82,7 @@ no dependencies.
 | Command | Effect |
 |---|---|
 | `/dustbunny` or `/db` | open/close the window |
+| `/db trace` | toggle a trade-skill state trace (persisted to SavedVariables for bug reports) |
 
 ## Notes & limitations
 - One click per cast is a client restriction, not a design choice — no addon
@@ -75,6 +91,8 @@ no dependencies.
 - Item lists reflect stock AzerothCore data; a heavily customized server's
   exotic items may not appear.
 - The window rebuilds from your bags live; bank contents are not scanned.
+- Smelting needs the Mining skill and uses the game's own recipe list; the
+  Forge tab shows only what you know how to smelt.
 
 ## Compatibility
 Built and tested on client build 12340 (3.3.5a) against AzerothCore.
@@ -83,6 +101,13 @@ Pure client addon — no server-side component, no dependencies.
 ## Development
 Written by GiggleFizz with AI assistance (Anthropic's Claude) — every line &
 feature designed, reviewed, and tested by a human. Issues and PRs welcome.
+
+The `dev/` folder holds the maintainer tooling and is not needed to play:
+- `gen_dustbunny.py generate|verify` — regenerates `DustBunnyData.lua` from
+  an AzerothCore world database and seals it against `dustbunny-manifest.tsv`.
+- `test_harness.lua` — an offline Lua 5.1 harness of the addon's behaviour
+  (run from the addon root: `lua5.1 dev/test_harness.lua`), including true
+  click ordering for the secure casts.
 
 <!-- Screenshots wanted: the window mid-dust; the launcher snapped to a bar. -->
 
